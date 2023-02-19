@@ -4,13 +4,14 @@ use rand::Rng;
 use raylib::prelude::*;
 
 const GENE_LEN: usize = 400;
+const MUTATION_RATE: f32 = 0.03;
 const DEGREE_CHANGE: f32 = 10.0;
 
 const SCREEN_WIDTH: i32 = 1000;
-const SCREEN_HEIGHT: i32 = 700;
-const BACKGROUND_COLOR: Color = Color::RAYWHITE;
+const SCREEN_HEIGHT: i32 = 650;
+const BACKGROUND_COLOR: Color = Color::new(24, 24, 24, 255);
 
-const ROCKET_COUNT: usize = 5;
+const ROCKET_COUNT: usize = 20;
 const ROCKET_SPEED: f32 = 3.0;
 const ROCKET_SIZE: Vector2 = Vector2::new(15.0, 45.0);
 const ALIVE_ROCKET_COLOR: Color = Color::new(230, 230, 230, 255);
@@ -64,6 +65,29 @@ impl DNA {
         self.curr_gene += 1;
         next_angle
     }
+
+    fn crossover(parent_a: Self, parent_b: Self) -> Self {
+        let mut rng = rand::thread_rng();
+        let rand_split_point = rng.gen_range(0..GENE_LEN);
+        let mut child = Self::new();
+        for i in 0..GENE_LEN {
+            if i < rand_split_point {
+                child.genes[i] = parent_a.genes[i]; 
+            } else {
+                child.genes[i] = parent_b.genes[i]; 
+            }
+        }
+        child
+    }
+
+    fn mutate(dna: &mut DNA) {
+        for i in 0..GENE_LEN {
+            let rand_num = rand::random::<f32>();
+            if rand_num < MUTATION_RATE {
+                dna.genes[i] = rand_f32(-DEGREE_CHANGE, DEGREE_CHANGE);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -107,7 +131,7 @@ struct World {
     pub target: Vector2,
     pub frame_counter: i32,
     pub timer_rect: Rectangle,
-    mating_pool: Vec<Rocket>
+    mating_pool: Vec<usize>
 }
 
 impl World {
@@ -136,6 +160,11 @@ impl World {
 
     fn restart(&mut self) {
         self.calc_fitness();
+        self.gen_mating_pool();
+        let mut instance = Self::new();
+        self.selection(&mut instance.rockets);
+
+        *self = instance;
     }
 
     fn calc_dist_from_target(&mut self) {
@@ -152,6 +181,34 @@ impl World {
 
         for rocket in &mut self.rockets {
             rocket.dna.fitness = rocket.dist_from_target / dist_from_target_sum;
+        }
+    }
+
+    fn gen_mating_pool(&mut self) {
+        self.mating_pool.clear();
+
+        for (ind, rocket) in self.rockets.iter().enumerate() {
+            let n = (rocket.dna.fitness * 100.0).floor() as usize;
+            for _ in 0..n {
+                self.mating_pool.push(ind);
+            }
+        }
+    }
+
+    fn selection(&self, rockets: &mut [Rocket; ROCKET_COUNT]) {
+        for rocket in rockets.iter_mut() {
+            let mut rocket_inst = Rocket::new(Vector2::new(
+                (SCREEN_WIDTH / 2) as f32,
+                (SCREEN_HEIGHT - 75) as f32,
+            ));
+
+            let mut rng = rand::thread_rng();
+            let rand_a = rng.gen_range(0..ROCKET_COUNT);
+            let rand_b = rng.gen_range(0..ROCKET_COUNT);
+            rocket_inst.dna = DNA::crossover(self.rockets[rand_a].dna, self.rockets[rand_b].dna);
+            DNA::mutate(&mut rocket_inst.dna);
+
+            *rocket = rocket_inst;
         }
     }
 
@@ -257,7 +314,7 @@ fn main() {
         // Handle input phase
         match handle_input(&rl) {
             Actions::Pause => pause = !pause,
-            Actions::Reset => {}
+            Actions::Reset => {world.restart(); println!("Restarted")},
             _ => {}
         };
 
