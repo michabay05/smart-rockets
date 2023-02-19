@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use rand::Rng;
 use raylib::prelude::*;
 
@@ -41,13 +43,11 @@ struct DNA {
 
 impl DNA {
     fn new() -> Self {
-        let mut instance = Self {
+        Self {
             genes: [0.0; GENE_LEN],
             curr_gene: 0,
             fitness: 0.0,
-        };
-        instance.randomize();
-        instance
+        }
     }
 
     fn randomize(&mut self) {
@@ -76,12 +76,10 @@ enum RocketState {
 #[derive(Clone, Copy)]
 struct Rocket {
     pub dna: DNA,
-
     pub pos: Vector2,
-    pub color: Color,
-
-    pub angle: f32,
     pub state: RocketState,
+    pub angle: f32,
+    pub dist_from_target: f32,
 }
 
 impl Rocket {
@@ -89,9 +87,9 @@ impl Rocket {
         Self {
             dna: DNA::new(),
             pos,
-            color: ALIVE_ROCKET_COLOR,
             angle: -90.0,
             state: RocketState::Alive,
+            dist_from_target: 0.0,
         }
     }
 
@@ -134,6 +132,27 @@ impl World {
             rocket.dna.randomize();
         }
         instance
+    }
+
+    fn restart(&mut self) {
+        self.calc_fitness();
+    }
+
+    fn calc_dist_from_target(&mut self) {
+        for rocket in &mut self.rockets {
+            let pos_diff = self.target.sub(rocket.pos);
+            let hyp = (pos_diff.x.powi(2)) + (pos_diff.y.powi(2));
+            rocket.dist_from_target = hyp.sqrt();
+        }
+    }
+
+    fn calc_fitness(&mut self) {
+        self.calc_dist_from_target();
+        let dist_from_target_sum: f32 = self.rockets.iter().map(|el| el.dist_from_target).sum();
+
+        for rocket in &mut self.rockets {
+            rocket.dna.fitness = rocket.dist_from_target / dist_from_target_sum;
+        }
     }
 
     fn collision_rocket(&self, ind: usize) -> bool {
