@@ -11,7 +11,7 @@ const SCREEN_WIDTH: i32 = 1000;
 const SCREEN_HEIGHT: i32 = 650;
 const BACKGROUND_COLOR: Color = Color::new(24, 24, 24, 255);
 
-const ROCKET_COUNT: usize = 20;
+const ROCKET_COUNT: usize = 80;
 const ROCKET_SPEED: f32 = 3.0;
 const ROCKET_SIZE: Vector2 = Vector2::new(15.0, 45.0);
 const ALIVE_ROCKET_COLOR: Color = Color::new(230, 230, 230, 255);
@@ -66,15 +66,15 @@ impl DNA {
         next_angle
     }
 
-    fn crossover(parent_a: Self, parent_b: Self) -> Self {
+    fn crossover(parent_a: &Self, parent_b: &Self) -> Self {
         let mut rng = rand::thread_rng();
         let rand_split_point = rng.gen_range(0..GENE_LEN);
         let mut child = Self::new();
         for i in 0..GENE_LEN {
             if i < rand_split_point {
-                child.genes[i] = parent_a.genes[i]; 
+                child.genes[i] = parent_a.genes[i];
             } else {
-                child.genes[i] = parent_b.genes[i]; 
+                child.genes[i] = parent_b.genes[i];
             }
         }
         child
@@ -90,7 +90,7 @@ impl DNA {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Clone, Copy)]
 enum RocketState {
     Alive,
     Dead,
@@ -127,11 +127,13 @@ impl Rocket {
 
 struct World {
     pub rockets: [Rocket; ROCKET_COUNT],
+    pub alive_count: i32,
     pub walls: [Rectangle; WALL_COUNT],
     pub target: Vector2,
-    pub frame_counter: i32,
+    pub frame_counter: u32,
     pub timer_rect: Rectangle,
-    mating_pool: Vec<usize>
+    pub generation: u32,
+    mating_pool: Vec<usize>,
 }
 
 impl World {
@@ -141,7 +143,11 @@ impl World {
                 (SCREEN_WIDTH / 2) as f32,
                 (SCREEN_HEIGHT - 75) as f32,
             )); ROCKET_COUNT],
-            walls: [Rectangle::new(200.0, 100.0, WALL_SIZE.x, WALL_SIZE.y); WALL_COUNT],
+            alive_count: ROCKET_COUNT as i32,
+            walls: [
+                Rectangle::new(300.0, 250.0, WALL_SIZE.x, WALL_SIZE.y),
+                Rectangle::new(150.0, 300.0, WALL_SIZE.x, WALL_SIZE.y),
+            ],
             target: Vector2::new(100.0, 100.0),
             frame_counter: 0,
             timer_rect: Rectangle::new(
@@ -150,6 +156,7 @@ impl World {
                 SCREEN_WIDTH as f32,
                 TIMER_RECT_HEIGHT as f32,
             ),
+            generation: 0,
             mating_pool: vec![],
         };
         for rocket in &mut instance.rockets {
@@ -163,6 +170,7 @@ impl World {
         self.gen_mating_pool();
         let mut instance = Self::new();
         self.selection(&mut instance.rockets);
+        instance.generation = self.generation + 1;
 
         *self = instance;
     }
@@ -180,7 +188,7 @@ impl World {
         let dist_from_target_sum: f32 = self.rockets.iter().map(|el| el.dist_from_target).sum();
 
         for rocket in &mut self.rockets {
-            rocket.dna.fitness = rocket.dist_from_target / dist_from_target_sum;
+            rocket.dna.fitness = 1.0 - (rocket.dist_from_target / dist_from_target_sum);
         }
     }
 
@@ -188,14 +196,19 @@ impl World {
         self.mating_pool.clear();
 
         for (ind, rocket) in self.rockets.iter().enumerate() {
-            let n = (rocket.dna.fitness * 100.0).floor() as usize;
-            for _ in 0..n {
+            let n = rocket.dna.fitness * 100.0;
+            let n = match rocket.state {
+                RocketState::Dead => n * (0.6),
+                RocketState::Alive => n,
+                RocketState::Successful => n * 2.0,
+            };
+            for _ in 0..(n.floor() as usize) {
                 self.mating_pool.push(ind);
             }
         }
     }
 
-    fn selection(&self, rockets: &mut [Rocket; ROCKET_COUNT]) {
+    fn selection(&self, rockets: &mut [Rocket]) {
         for rocket in rockets.iter_mut() {
             let mut rocket_inst = Rocket::new(Vector2::new(
                 (SCREEN_WIDTH / 2) as f32,
@@ -203,9 +216,14 @@ impl World {
             ));
 
             let mut rng = rand::thread_rng();
-            let rand_a = rng.gen_range(0..ROCKET_COUNT);
-            let rand_b = rng.gen_range(0..ROCKET_COUNT);
-            rocket_inst.dna = DNA::crossover(self.rockets[rand_a].dna, self.rockets[rand_b].dna);
+            let rand_a = rng.gen_range(0..self.mating_pool.len());
+            let rand_b = rng.gen_range(0..self.mating_pool.len());
+            let parent_a_ind = self.mating_pool[rand_a];
+            let parent_b_ind = self.mating_pool[rand_b];
+            rocket_inst.dna = DNA::crossover(
+                &self.rockets[parent_a_ind].dna,
+                &self.rockets[parent_b_ind].dna,
+            );
             DNA::mutate(&mut rocket_inst.dna);
 
             *rocket = rocket_inst;
@@ -222,11 +240,22 @@ impl World {
 
     fn collision_wall(&self, pos: &Vector2) -> bool {
         for wall in &self.walls {
-            if pos.x > wall.x && pos.x < wall.x + wall.width && pos.y > wall.y && pos.y < wall.y + wall.height {
+            if pos.x > wall.x
+                && pos.x < wall.x + wall.width
+                && pos.y > wall.y
+                && pos.y < wall.y + wall.height
+            {
                 return true;
             }
         }
         false
+    }
+
+    fn collision_target(&self, ind: usize) -> bool {
+        let pos = self.rockets[ind].pos;
+        let diff = self.target.sub(pos);
+        let dist_from_center = (diff.x.powi(2) + diff.y.powi(2)).sqrt();
+        dist_from_center < TARGET_RADIUS
     }
 }
 
@@ -247,17 +276,33 @@ fn handle_input(rl: &RaylibHandle) -> Actions {
 }
 
 fn update(world: &mut World) {
-    let mut inds: Vec<usize> = vec![];
+    if world.frame_counter == GENE_LEN as u32 {
+        world.restart();
+        return;
+    }
+    let mut dead_inds: Vec<usize> = vec![];
+    let mut succ_inds: Vec<usize> = vec![];
     for ind in 0..world.rockets.len() {
         if world.collision_rocket(ind) {
-            inds.push(ind);
+            dead_inds.push(ind);
+            continue;
+        }
+        if world.collision_target(ind) {
+            succ_inds.push(ind);
+            continue;
         }
     }
 
     for (ind, rocket) in world.rockets.iter_mut().enumerate() {
-        if inds.contains(&ind) {
+        if dead_inds.contains(&ind) {
+            if rocket.state == RocketState::Alive {
+                world.alive_count -= 1;
+            }
             rocket.state = RocketState::Dead;
-            inds.remove(inds.iter().position(|x| *x == ind).unwrap());
+            continue;
+        }
+        if succ_inds.contains(&ind) {
+            rocket.state = RocketState::Successful;
             continue;
         }
         rocket.angle += rocket.dna.next_angle();
@@ -267,7 +312,7 @@ fn update(world: &mut World) {
         rocket.pos.y += pos_offset.y;
     }
     world.frame_counter += 1;
-    world.timer_rect.x -= (SCREEN_WIDTH as usize / GENE_LEN) as f32;
+    world.timer_rect.width -= SCREEN_WIDTH as f32 / GENE_LEN as f32;
 }
 
 fn render(mut ctx: RaylibDrawHandle, world: &World) {
@@ -285,7 +330,7 @@ fn render(mut ctx: RaylibDrawHandle, world: &World) {
             Rectangle::new(rocket.pos.x, rocket.pos.y, ROCKET_SIZE.x, ROCKET_SIZE.y),
             Vector2::new(ROCKET_SIZE.x / 2.0, ROCKET_SIZE.y / 2.0),
             rocket.angle + 90.0,
-            rocket_color
+            rocket_color,
         );
     }
 
@@ -298,12 +343,20 @@ fn render(mut ctx: RaylibDrawHandle, world: &World) {
     ctx.draw_circle_v(world.target, TARGET_RADIUS, TARGET_OUTER_COLOR);
     ctx.draw_circle_v(world.target, TARGET_RADIUS / 2.0, TARGET_INNER_COLOR);
     ctx.draw_rectangle_rec(world.timer_rect, TIMER_RECT_COLOR);
+
+    ctx.draw_text(
+        format!("Generation {}", world.generation).as_str(),
+        20,
+        SCREEN_HEIGHT - 40,
+        20,
+        Color::RAYWHITE,
+    );
 }
 
 fn main() {
     let (mut rl, thread) = raylib::init()
         .size(SCREEN_WIDTH, SCREEN_HEIGHT)
-        .title("Hello, World")
+        .title("Smart Rockets")
         .msaa_4x()
         .vsync()
         .build();
@@ -314,7 +367,10 @@ fn main() {
         // Handle input phase
         match handle_input(&rl) {
             Actions::Pause => pause = !pause,
-            Actions::Reset => {world.restart(); println!("Restarted")},
+            Actions::Reset => {
+                world.restart();
+                println!("Restarted")
+            }
             _ => {}
         };
 

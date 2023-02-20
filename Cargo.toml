@@ -1,5 +1,5 @@
 [package]
-name = "raylib_rs"
+name = "smart_rockets"
 version = "0.1.0"
 edition = "2021"
 
